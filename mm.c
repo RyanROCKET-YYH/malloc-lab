@@ -461,14 +461,12 @@ static block_t *find_prev(block_t *block) {
  * @param[in] block A block being freed in the heap
  * @post update the free list
  */
-static void *insertFree(block_t *block) {
+static void insertFree(block_t *block) {
     block->body.link_list.pred = NULL;
     block->body.link_list.succ = free_list_start;
-    
     if (free_list_start != NULL) {
         free_list_start->body.link_list.pred = block;
     }
-
     free_list_start = block;
 }
 
@@ -478,7 +476,7 @@ static void *insertFree(block_t *block) {
  *
  * @param[in] block A block being allocated in the heap
  */
-static void *removeFree(block_t *block) {
+static void removeFree(block_t *block) {
     block_t *pred = block->body.link_list.pred;
     block_t *succ = block->body.link_list.succ;
 
@@ -520,25 +518,33 @@ static block_t *coalesce_block(block_t *block) {
     size_t size = get_size(block);
 
     if (prev_alloc && next_alloc) { /* Case 1 */
+        insertFree(block);
         return block;
     }
 
     // case 2: only next block is free
-    if (prev_alloc && !next_alloc) { /* Case 2 */
+    else if (prev_alloc && !next_alloc) { /* Case 2 */
         size += get_size(next_block);
         write_block(block, size, false);
+        removeFree(next_block);
+        insertFree(block);
     }
 
     else if (!prev_alloc && next_alloc) { /* Case 3 */
         size += get_size(prev_block);
         block = prev_block;
         write_block(block, size, false);
+        removeFree(prev_block);
+        insertFree(block);
     }
 
     else if (!prev_alloc && !next_alloc) { /* Case 4 */
         size += get_size(prev_block) + get_size(next_block);
         block = prev_block;
         write_block(block, size, false);
+        removeFree(prev_block);
+        removeFree(next_block);
+        insertFree(block);
     }
 
     return block;
@@ -746,24 +752,21 @@ bool mm_init(void) {
     if (start == (void *)-1) {
         return false;
     }
-
     /*
      * Heap prologue marks the beginning of the heap, and epilogue marks the end
      * of the heap. Prologue correspond to footer and epilogue correspond to
      * header are preventing them from coalescing operation.
      */
-
     start[0] = pack(0, true); // Heap prologue (block footer)
     start[1] = pack(0, true); // Heap epilogue (block header)
-
     // Heap starts with first "block header", currently the epilogue
     heap_start = (block_t *)&(start[1]);
-
     // Extend the empty heap with a free block of chunksize bytes
-    if (extend_heap(chunksize) == NULL) {
+    block_t *initial_block = extend_heap(chunksize);
+    if (initial_block == NULL) {
         return false;
     }
-
+    insertFree(initial_block);
     return true;
 }
 
