@@ -409,33 +409,45 @@ static block_t *find_prev(block_t *block) {
 /******** The remaining content below are helper and debug routines ********/
 
 /**
- * @brief
+ * @brief Coalesce block based on 4 cases
+ * case 1: prev and next are allocated
+ * case 2: only next is free
+ * case 3: only prev is free
+ * case 4: both prev and next are free
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] block
- * @return
+ * @param[in] block A pointer to the block need to coalesce
+ * @return A pointer to the beginning of the free block
  */
 static block_t *coalesce_block(block_t *block) {
-    /*
-     * TODO: delete or replace this comment once you're done.
-     *
-     * Before you start, it will be helpful to review the "Dynamic Memory
-     * Allocation: Basic" lecture, and especially the four coalescing
-     * cases that are described.
-     *
-     * The actual content of the function will probably involve a call to
-     * find_prev(), and multiple calls to write_block(). For examples of how
-     * to use write_block(), take a look at split_block().
-     *
-     * Please do not reference code from prior semesters for this, including
-     * old versions of the 213 website. We also discourage you from looking
-     * at the malloc code in CS:APP and K&R, which make heavy use of macros
-     * and which we no longer consider to be good style.
-     */
+     /* get the previous and next block size and allocate info */
+     block_t *prev_block = find_prev(block);
+     block_t *next_block = find_next(block);
+     bool prev_alloc = get_alloc(find_prev_footer(block));
+     bool next_alloc = get_alloc(next_block);
+     size_t size = get_size(block);
+
+    if (prev_alloc && next_alloc) {         /* Case 1 */
+        return block;
+    }
+
+    // case 2: only next block is free
+    if (prev_alloc && !next_alloc) {        /* Case 2 */
+        size += get_size(next_block);
+        write_block(block, size, false);
+    }
+
+    else if (!prev_alloc && next_alloc) {   /* Case 3 */
+        size += get_size(prev_block);
+        block = prev_block;
+        write_block(block, size, false);
+    }
+
+    else if (!prev_alloc && !next_alloc) {  /* Case 4 */
+        size += get_size(prev_block) + get_size(next_block);
+        block = prev_block;
+        write_block(block, size, false);
+    }
+
     return block;
 }
 
