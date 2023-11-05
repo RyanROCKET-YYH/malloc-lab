@@ -419,30 +419,30 @@ static block_t *find_prev(block_t *block) {
  * @return A pointer to the beginning of the free block
  */
 static block_t *coalesce_block(block_t *block) {
-     /* get the previous and next block size and allocate info */
-     block_t *prev_block = find_prev(block);
-     block_t *next_block = find_next(block);
-     bool prev_alloc = get_alloc(find_prev_footer(block));
-     bool next_alloc = get_alloc(next_block);
-     size_t size = get_size(block);
+    /* get the previous and next block size and allocate info */
+    block_t *prev_block = find_prev(block);
+    block_t *next_block = find_next(block);
+    bool prev_alloc = (prev_block == NULL) ? true : get_alloc(prev_block);
+    bool next_alloc = (next_block == NULL) ? true : get_alloc(next_block);
+    size_t size = get_size(block);
 
-    if (prev_alloc && next_alloc) {         /* Case 1 */
+    if (prev_alloc && next_alloc) { /* Case 1 */
         return block;
     }
 
     // case 2: only next block is free
-    if (prev_alloc && !next_alloc) {        /* Case 2 */
+    if (prev_alloc && !next_alloc) { /* Case 2 */
         size += get_size(next_block);
         write_block(block, size, false);
     }
 
-    else if (!prev_alloc && next_alloc) {   /* Case 3 */
+    else if (!prev_alloc && next_alloc) { /* Case 3 */
         size += get_size(prev_block);
         block = prev_block;
         write_block(block, size, false);
     }
 
-    else if (!prev_alloc && !next_alloc) {  /* Case 4 */
+    else if (!prev_alloc && !next_alloc) { /* Case 4 */
         size += get_size(prev_block) + get_size(next_block);
         block = prev_block;
         write_block(block, size, false);
@@ -469,7 +469,7 @@ static block_t *extend_heap(size_t size) {
         return NULL;
     }
 
-    /*    
+    /*
      * bp is the new block payload, write the new block starting one word before
      * bp is because we need to write the head for the block then precedes with
      * payload. (done by payload_to_header) the block will still have total size
@@ -494,13 +494,15 @@ static block_t *extend_heap(size_t size) {
 
 /**
  * @brief This funciton splits a block into two blocks.
- * one with the size of requested asize, and the other is the size of block initial size - asize, (this size has to be greater than min_block_size)
- * The first block will be allocated, and the second is free
+ * one with the size of requested asize, and the other is the size of block
+ * initial size - asize, (this size has to be greater than min_block_size) The
+ * first block will be allocated, and the second is free
  *
  * @param[in] block A pointer to the block that need to be splited
  * @param[in] asize The size of the first block we want to split
- * @pre The block has to be allocted and asize need to be greater than block size
- * @post The block still need to be allocated. 
+ * @pre The block has to be allocted and asize need to be greater than block
+ * size
+ * @post The block still need to be allocated.
  */
 static void split_block(block_t *block, size_t asize) {
     dbg_requires(get_alloc(block));
@@ -556,27 +558,61 @@ static block_t *find_fit(size_t asize) {
  * @return
  */
 bool mm_checkheap(int line) {
-    /*
-     * TODO: Delete this comment!
-     *
-     * You will need to write the heap checker yourself.
-     * Please keep modularity in mind when you're writing the heap checker!
-     *
-     * As a filler: one guacamole is equal to 6.02214086 x 10**23 guacas.
-     * One might even call it...  the avocado's number.
-     *
-     * Internal use only: If you mix guacamole on your bibimbap,
-     * do you eat it with a pair of chopsticks, or with a spoon?
-     */
-    dbg_printf("I did not write a heap checker (called at line %d)\n", line);
+    block_t *block;
+    // check prologue
+    if (!get_alloc(heap_start) || get_size(heap_start) != 0) {
+        dbg_printf("Error with prologue blocks.");
+        return false;
+    }
+
+    for (block = heap_start; get_size(block) > 0; block = find_next(block)) {
+        if ((size_t)block %
+            dsize) { /* check block alignment is a multiple of 16*/
+            dbg_printf("Block at %p is not aligned at line %d\n", (void *)block,
+                   line);
+            return false;
+        }
+
+        if (get_size(block) <
+            min_block_size) { /* check block's size is greater than minimum */
+            dbg_printf("Block size error at %p, at line %d\n", (void *)block, line);
+            return false;
+        }
+
+        // check each block's header and footer
+        if (get_alloc(block) != extract_alloc(header_to_footer(block)) ||
+            get_size(block) != extract_size(header_to_footer(block))) {
+            dbg_printf("Header and footer does not match with each other at %p, at line %d\n", (void *)block, line);
+            return false;
+        }
+
+        // check blocks lie within heap boundaries
+        if ((void *)block < mem_heap_lo() || (void *)block > mem_heap_hi()) {
+            dbg_printf("Block at %p is outside heap.\n", (void *)block);
+            return false;
+        }
+
+        // check coalescing
+        if (!get_alloc(block) && !get_alloc(find_next(block))) {
+            dbg_printf("Consecutive free blocks in the heap at line %d\n", line);
+            return false;
+        }
+    }
+
+    // check epilogue
+    if (!get_alloc(block) || get_size(block) != 0) {
+        dbg_printf("Error with epilogue blocks.");
+        return false;
+    }
     return true;
 }
 
 /**
- * @brief Create an initial heap and extend heap with a free block of chunksize bytes 
+ * @brief Create an initial heap and extend heap with a free block of chunksize
+ * bytes
  *
  * <What are the function's arguments?> No Arguments
- * @return whether the heap is successfully initialized. 
+ * @return whether the heap is successfully initialized.
  * @post the heap will initialized with prologue and epilogue
  */
 bool mm_init(void) {
@@ -588,8 +624,9 @@ bool mm_init(void) {
     }
 
     /*
-     * Heap prologue marks the beginning of the heap, and epilogue marks the end of the heap.
-     * Prologue correspond to footer and epilogue correspond to header are preventing them from coalescing operation.
+     * Heap prologue marks the beginning of the heap, and epilogue marks the end
+     * of the heap. Prologue correspond to footer and epilogue correspond to
+     * header are preventing them from coalescing operation.
      */
 
     start[0] = pack(0, true); // Heap prologue (block footer)
@@ -613,7 +650,7 @@ bool mm_init(void) {
  * @return A pointer to the allocated block payload, NULL if failed malloc.
  * @pre Need to checkheap, ensure no errors on heap.
  * @post Need to checkheap again after malloc
- */ 
+ */
 void *malloc(size_t size) {
     dbg_requires(mm_checkheap(__LINE__));
 
@@ -674,7 +711,8 @@ void *malloc(size_t size) {
  *
  * @param[in] bp The pointer to block payload that need to be deallocated
  * @pre need to pass heap checker, the block is allocated before free
- * @post set the block to free, coalesce with neighbors and pass heap checker again.
+ * @post set the block to free, coalesce with neighbors and pass heap checker
+ * again.
  */
 void free(void *bp) {
     dbg_requires(mm_checkheap(__LINE__));
