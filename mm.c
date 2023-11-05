@@ -16,7 +16,7 @@
  *
  *************************************************************************
  *
- * @author Your Name <andrewid@andrew.cmu.edu>
+ * @author Yuhong Yao <yuhongy@andrew.cmu.edu>
  */
 
 #include <assert.h>
@@ -95,18 +95,23 @@ static const size_t dsize = 2 * wsize;
 static const size_t min_block_size = 2 * dsize;
 
 /**
- * TODO: explain what chunksize is
- * (Must be divisible by dsize)
+ * @brief The size of the initial free block and the default size for expanding
+ * the heap. (1 << 12) = 2^12 = 4096 bytes (Must be divisible by dsize) because
+ * of alighment
  */
 static const size_t chunksize = (1 << 12);
 
 /**
- * TODO: explain what alloc_mask is
+ * @brief Alloc mask is the bit mask tells if the block is being allocated
+ * there will be 4 bits in header or footer will be free to use, alloc bit is
+ * the last bit
  */
 static const word_t alloc_mask = 0x1;
 
 /**
- * TODO: explain what size_mask is
+ * @brief size mask is used to extract the size of the block from header or
+ * footer, since the last four bits are used as flags, size will be the
+ * remaining bits
  */
 static const word_t size_mask = ~(word_t)0xF;
 
@@ -117,13 +122,6 @@ typedef struct block {
 
     /**
      * @brief A pointer to the block payload.
-     *
-     * TODO: feel free to delete this comment once you've read it carefully.
-     * We don't know what the size of the payload will be, so we will declare
-     * it as a zero-length array, which is a GNU compiler extension. This will
-     * allow us to obtain a pointer to the start of the payload. (The similar
-     * standard-C feature of "flexible array members" won't work here because
-     * those are not allowed to be members of a union.)
      *
      * WARNING: A zero-length array must be the last element in a struct, so
      * there should not be any struct fields after it. For this lab, we will
@@ -138,10 +136,10 @@ typedef struct block {
     char payload[0];
 
     /*
-     * TODO: delete or replace this comment once you've thought about it.
-     * Why can't we declare the block footer here as part of the struct?
-     * Why do we even have footers -- will the code work fine without them?
-     * which functions actually use the data contained in footers?
+     * Footers would contain the same information as header does. It is not
+     * included in the struct because footer will be depand on the payload.
+     * Functions such as freeing, coalesing or realloac will take advantage of
+     * footer
      */
 } block_t;
 
@@ -442,15 +440,13 @@ static block_t *coalesce_block(block_t *block) {
 }
 
 /**
- * @brief
+ * @brief Used to extend heap by specified amount.
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] size
- * @return
+ * @param[in] size The size that heap should be extend
+ * @return A pointer to the start of the block that is extended
+ * @pre size need to be greater than 0
+ * @post The heap is extended by at least size bytes.(round up to even number of
+ * words)
  */
 static block_t *extend_heap(size_t size) {
     void *bp;
@@ -461,11 +457,13 @@ static block_t *extend_heap(size_t size) {
         return NULL;
     }
 
-    /*
-     * TODO: delete or replace this comment once you've thought about it.
-     * Think about what bp represents. Why do we write the new block
-     * starting one word BEFORE bp, but with the same size that we
-     * originally requested?
+    /*    
+     * bp is the new block payload, write the new block starting one word before
+     * bp is because we need to write the head for the block then precedes with
+     * payload. (done by payload_to_header) the block will still have total size
+     * of header+payload+footer that we requested. And because we have old
+     * epilogue, so we can use one word before bp to replace with our new
+     * header, and write a new epilogue after and wouldn't affect the heap
      */
 
     // Initialize free block header/footer
@@ -483,15 +481,14 @@ static block_t *extend_heap(size_t size) {
 }
 
 /**
- * @brief
+ * @brief This funciton splits a block into two blocks.
+ * one with the size of requested asize, and the other is the size of block initial size - asize, (this size has to be greater than min_block_size)
+ * The first block will be allocated, and the second is free
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] block
- * @param[in] asize
+ * @param[in] block A pointer to the block that need to be splited
+ * @param[in] asize The size of the first block we want to split
+ * @pre The block has to be allocted and asize need to be greater than block size
+ * @post The block still need to be allocated. 
  */
 static void split_block(block_t *block, size_t asize) {
     dbg_requires(get_alloc(block));
@@ -511,15 +508,17 @@ static void split_block(block_t *block, size_t asize) {
 }
 
 /**
- * @brief
+ * @brief Search for the availbe block on heap using first fit.
  *
  * <What does this function do?>
  * <What are the function's arguments?>
  * <What is the function's return value?>
  * <Are there any preconditions or postconditions?>
  *
- * @param[in] asize
- * @return
+ * @param[in] asize The size of the block need to be allocated.
+ * @return The pointer to the first fitted block. If no fit return NULL.
+ * @pre It assumes that the heap is initialized and asize is valid.
+ * @post The block that returned is free and large enough to allocate.
  */
 static block_t *find_fit(size_t asize) {
     block_t *block;
@@ -562,14 +561,11 @@ bool mm_checkheap(int line) {
 }
 
 /**
- * @brief
+ * @brief Create an initial heap and extend heap with a free block of chunksize bytes 
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @return
+ * <What are the function's arguments?> No Arguments
+ * @return whether the heap is successfully initialized. 
+ * @post the heap will initialized with prologue and epilogue
  */
 bool mm_init(void) {
     // Create the initial empty heap
@@ -580,9 +576,8 @@ bool mm_init(void) {
     }
 
     /*
-     * TODO: delete or replace this comment once you've thought about it.
-     * Think about why we need a heap prologue and epilogue. Why do
-     * they correspond to a block footer and header respectively?
+     * Heap prologue marks the beginning of the heap, and epilogue marks the end of the heap.
+     * Prologue correspond to footer and epilogue correspond to header are preventing them from coalescing operation.
      */
 
     start[0] = pack(0, true); // Heap prologue (block footer)
@@ -600,16 +595,13 @@ bool mm_init(void) {
 }
 
 /**
- * @brief
+ * @brief Dynamically allocating a block of memory of a specified size.
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] size
- * @return
- */
+ * @param[in] size The requested size of memory to be allocated.
+ * @return A pointer to the allocated block payload, NULL if failed malloc.
+ * @pre Need to checkheap, ensure no errors on heap.
+ * @post Need to checkheap again after malloc
+ */ 
 void *malloc(size_t size) {
     dbg_requires(mm_checkheap(__LINE__));
 
@@ -666,14 +658,11 @@ void *malloc(size_t size) {
 }
 
 /**
- * @brief
+ * @brief Deallocate the memroy blocks from heap
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] bp
+ * @param[in] bp The pointer to block payload that need to be deallocated
+ * @pre need to pass heap checker, the block is allocated before free
+ * @post set the block to free, coalesce with neighbors and pass heap checker again.
  */
 void free(void *bp) {
     dbg_requires(mm_checkheap(__LINE__));
@@ -698,16 +687,12 @@ void free(void *bp) {
 }
 
 /**
- * @brief
+ * @brief reallocate memory block pointed to the newptr of size bytes
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] ptr
- * @param[in] size
- * @return
+ * @param[in] ptr A pointer to the block that need to be reallocated
+ * @param[in] size the new size of the block
+ * @return A pointer to the new allocated memory block
+ * @post the old block will be freed and is being copied to the new block.
  */
 void *realloc(void *ptr, size_t size) {
     block_t *block = payload_to_header(ptr);
@@ -747,16 +732,12 @@ void *realloc(void *ptr, size_t size) {
 }
 
 /**
- * @brief
+ * @brief Similar to malloc, but set all bits to zero after malloc.
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] elements
- * @param[in] size
- * @return
+ * @param[in] elements The number of elements need to be allocated.
+ * @param[in] size The size of each element
+ * @return A pointer to the allocated memory
+ * @post The allocated memory is initialized to zero.
  */
 void *calloc(size_t elements, size_t size) {
     void *bp;
