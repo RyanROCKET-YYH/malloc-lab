@@ -559,14 +559,15 @@ static block_t *find_fit(size_t asize) {
  */
 bool mm_checkheap(int line) {
     block_t *block;
+    word_t *prologue = (word_t *)heap_start - 1;
     // check prologue
-    if (!get_alloc(heap_start) || get_size(heap_start) != 0) {
+    if (*prologue != pack(0, true)) {
         dbg_printf("Error with prologue blocks.");
         return false;
     }
 
     for (block = heap_start; get_size(block) > 0; block = find_next(block)) {
-        if ((size_t)block %
+        if ((size_t)header_to_payload(block) %
             dsize) { /* check block alignment is a multiple of 16*/
             dbg_printf("Block at %p is not aligned at line %d\n", (void *)block,
                    line);
@@ -580,8 +581,8 @@ bool mm_checkheap(int line) {
         }
 
         // check each block's header and footer
-        if (get_alloc(block) != extract_alloc(header_to_footer(block)) ||
-            get_size(block) != extract_size(header_to_footer(block))) {
+        if (get_alloc(block) != extract_alloc(* header_to_footer(block)) ||
+            get_size(block) != extract_size(* header_to_footer(block))) {
             dbg_printf("Header and footer does not match with each other at %p, at line %d\n", (void *)block, line);
             return false;
         }
