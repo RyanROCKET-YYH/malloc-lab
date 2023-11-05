@@ -109,6 +109,12 @@ static const size_t chunksize = (1 << 12);
 static const word_t alloc_mask = 0x1;
 
 /**
+ * @brief Boundary mask is the bit mask tells if the previous block is being allocated
+ * there will be 4 bits in header or footer will be free to use, bounday tag is the bit left to allocate bit
+ */
+static const word_t bounday_mask = 0x2;
+
+/**
  * @brief size mask is used to extract the size of the block from header or
  * footer, since the last four bits are used as flags, size will be the
  * remaining bits
@@ -311,6 +317,15 @@ static bool extract_alloc(word_t word) {
  */
 static bool get_alloc(block_t *block) {
     return extract_alloc(block->header);
+}
+
+/**
+ * @brief Set the boundary tag
+ * @param[in] header the pointer to the header of the block
+ * @param prev_alloc boolean of the previous block is alloced or not 
+ */
+static void set_boundary(word_t *header, bool prev_alloc) {
+    *header = prev_alloc ? (*header | bounday_mask) : (*header & ~bounday_mask);
 }
 
 /**
@@ -544,6 +559,36 @@ static block_t *find_fit(size_t asize) {
         }
     }
     return NULL; // no fit found
+}
+
+/**
+ * @brief Search for the availbe block on heap using best fit.
+ *
+ * <What does this function do?>
+ * <What are the function's arguments?>
+ * <What is the function's return value?>
+ * <Are there any preconditions or postconditions?>
+ *
+ * @param[in] asize The size of the block need to be allocated.
+ * @return The pointer to the first fitted block. If no fit return NULL.
+ * @pre It assumes that the heap is initialized and asize is valid.
+ * @post The block that returned is free and large enough to allocate.
+ */
+static block_t *best_fit(size_t asize) {
+    block_t *block;
+    block_t *best_block = NULL;
+    size_t diff = 0;
+
+    for (block = heap_start; get_size(block) > 0; block = find_next(block)) {
+        
+        if (!(get_alloc(block)) && (asize <= get_size(block))) {
+            if (diff == 0 || diff > get_size(block)) {
+                diff = get_size(block);
+                best_block = block;
+            }
+        }
+    }
+    return best_block;
 }
 
 /**
