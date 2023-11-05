@@ -109,8 +109,9 @@ static const size_t chunksize = (1 << 12);
 static const word_t alloc_mask = 0x1;
 
 /**
- * @brief Boundary mask is the bit mask tells if the previous block is being allocated
- * there will be 4 bits in header or footer will be free to use, bounday tag is the bit left to allocate bit
+ * @brief Boundary mask is the bit mask tells if the previous block is being
+ * allocated there will be 4 bits in header or footer will be free to use,
+ * bounday tag is the bit left to allocate bit
  */
 static const word_t bounday_mask = 0x2;
 
@@ -141,9 +142,9 @@ typedef struct block {
      */
     union {
         struct {
-            struct block_t *pred;
-            struct block_t *succ;
-        } link_list
+            struct block *pred;
+            struct block *succ;
+        } link_list;
         char payload[0];
     } body;
 
@@ -331,7 +332,7 @@ static bool get_alloc(block_t *block) {
 /**
  * @brief Set the boundary tag
  * @param[in] header the pointer to the header of the block
- * @param prev_alloc boolean of the previous block is alloced or not 
+ * @param prev_alloc boolean of the previous block is alloced or not
  */
 static void set_boundary(word_t *header, bool prev_alloc) {
     *header = prev_alloc ? (*header | bounday_mask) : (*header & ~bounday_mask);
@@ -456,8 +457,9 @@ static block_t *find_prev(block_t *block) {
 
 /**
  * @brief Insert a free block into the free list using LIFO policy
- * When the free_list_start is NULL, meaning this block is going to be the first free block
- * when not NULL, the first free list block will has predcessor point to current block.
+ * When the free_list_start is NULL, meaning this block is going to be the first
+ * free block when not NULL, the first free list block will has predcessor point
+ * to current block.
  * @param[in] block A block being freed in the heap
  * @post update the free list
  */
@@ -488,7 +490,7 @@ static void removeFree(block_t *block) {
 
     if (succ != NULL) {
         succ->body.link_list.pred = pred;
-    } 
+    }
 }
 
 /*
@@ -518,6 +520,7 @@ static block_t *coalesce_block(block_t *block) {
     size_t size = get_size(block);
 
     if (prev_alloc && next_alloc) { /* Case 1 */
+        write_block(block, size, false);
         insertFree(block);
         return block;
     }
@@ -615,6 +618,9 @@ static void split_block(block_t *block, size_t asize) {
 
         block_next = find_next(block);
         write_block(block_next, block_size - asize, false);
+
+        // insert the new free block into the list
+        insertFree(block_next);
     }
 
     dbg_ensures(get_alloc(block));
@@ -636,13 +642,14 @@ static void split_block(block_t *block, size_t asize) {
 static block_t *find_fit(size_t asize) {
     block_t *block;
 
-    for (block = heap_start; get_size(block) > 0; block = find_next(block)) {
-
+    for (block = free_list_start; block != NULL;
+         block = find_next_free(block)) {
+        //dbg_printf("Current block: %p, Succ: %p\n", (void*)block, (void*)block->body.link_list.succ);
         if (!(get_alloc(block)) && (asize <= get_size(block))) {
             return block;
         }
-    }
-    return NULL; // no fit found
+    }  
+    return NULL; // no fit found  
 }
 
 /**
@@ -663,8 +670,9 @@ static block_t *best_fit(size_t asize) {
     block_t *best_block = NULL;
     size_t diff = 0;
 
-    for (block = heap_start; get_size(block) > 0; block = find_next(block)) {
-        
+    for (block = free_list_start; block != NULL;
+         block = find_next_free(block)) {
+
         if (!(get_alloc(block)) && (asize <= get_size(block))) {
             if (diff == 0 || diff > get_size(block)) {
                 diff = get_size(block);
@@ -699,20 +707,23 @@ bool mm_checkheap(int line) {
         if ((size_t)header_to_payload(block) %
             dsize) { /* check block alignment is a multiple of 16*/
             dbg_printf("Block at %p is not aligned at line %d\n", (void *)block,
-                   line);
+                       line);
             return false;
         }
 
         if (get_size(block) <
             min_block_size) { /* check block's size is greater than minimum */
-            dbg_printf("Block size error at %p, at line %d\n", (void *)block, line);
+            dbg_printf("Block size error at %p, at line %d\n", (void *)block,
+                       line);
             return false;
         }
 
         // check each block's header and footer
-        if (get_alloc(block) != extract_alloc(* header_to_footer(block)) ||
-            get_size(block) != extract_size(* header_to_footer(block))) {
-            dbg_printf("Header and footer does not match with each other at %p, at line %d\n", (void *)block, line);
+        if (get_alloc(block) != extract_alloc(*header_to_footer(block)) ||
+            get_size(block) != extract_size(*header_to_footer(block))) {
+            dbg_printf("Header and footer does not match with each other at "
+                       "%p, at line %d\n",
+                       (void *)block, line);
             return false;
         }
 
@@ -724,7 +735,8 @@ bool mm_checkheap(int line) {
 
         // check coalescing
         if (!get_alloc(block) && !get_alloc(find_next(block))) {
-            dbg_printf("Consecutive free blocks in the heap at line %d\n", line);
+            dbg_printf("Consecutive free blocks in the heap at line %d\n",
+                       line);
             return false;
         }
     }
@@ -748,8 +760,8 @@ bool mm_checkheap(int line) {
 bool mm_init(void) {
     // Create the initial empty heap
     word_t *start = (word_t *)(mem_sbrk(2 * wsize));
-
-    if (start == (void *)-1) {
+    
+    if (start == (void *)-1) {  
         return false;
     }
     /*
@@ -766,6 +778,8 @@ bool mm_init(void) {
     if (initial_block == NULL) {
         return false;
     }
+
+    free_list_start = NULL;
     insertFree(initial_block);
     return true;
 }
@@ -823,6 +837,9 @@ void *malloc(size_t size) {
     // Mark block as allocated
     size_t block_size = get_size(block);
     write_block(block, block_size, true);
+
+    // Remove block from free list
+    removeFree(block);
 
     // Try to split the block if too large
     split_block(block, asize);
