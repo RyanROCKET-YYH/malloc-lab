@@ -139,7 +139,13 @@ typedef struct block {
      * should use a union to alias this zero-length array with another struct,
      * in order to store additional types of data in the payload memory.
      */
-    char payload[0];
+    union {
+        struct {
+            struct block_t *pred;
+            struct block_t *succ;
+        } link_list
+        char payload[0];
+    } body;
 
     /*
      * Footers would contain the same information as header does. It is not
@@ -153,6 +159,9 @@ typedef struct block {
 
 /** @brief Pointer to first block in the heap */
 static block_t *heap_start = NULL;
+
+/** @brief Pointer to the first block in the free list */
+static block_t *free_list_start = NULL;
 
 /*
  *****************************************************************************
@@ -243,7 +252,7 @@ static size_t get_size(block_t *block) {
  * @return The corresponding block
  */
 static block_t *payload_to_header(void *bp) {
-    return (block_t *)((char *)bp - offsetof(block_t, payload));
+    return (block_t *)((char *)bp - offsetof(block_t, body.payload));
 }
 
 /**
@@ -255,7 +264,7 @@ static block_t *payload_to_header(void *bp) {
  */
 static void *header_to_payload(block_t *block) {
     dbg_requires(get_size(block) != 0);
-    return (void *)(block->payload);
+    return (void *)(block->body.payload);
 }
 
 /**
@@ -268,7 +277,7 @@ static void *header_to_payload(block_t *block) {
 static word_t *header_to_footer(block_t *block) {
     dbg_requires(get_size(block) != 0 &&
                  "Called header_to_footer on the epilogue block");
-    return (word_t *)(block->payload + get_size(block) - dsize);
+    return (word_t *)(block->body.payload + get_size(block) - dsize);
 }
 
 /**
@@ -379,6 +388,36 @@ static block_t *find_next(block_t *block) {
 }
 
 /**
+ * @brief Finds the next free block on the heap.
+ *
+ * This function accesses the next block in the "explicit list" of the heap
+ * by access the succ pointer
+ *
+ * @param[in] block A block in the heap
+ * @return The next free block on the heap
+ * @pre The block is not the epilogue
+ */
+static block_t *find_next_free(block_t *block) {
+    dbg_requires(block != NULL);
+    return block->body.link_list.succ;
+}
+
+/**
+ * @brief Finds the prev free block on the heap.
+ *
+ * This function accesses the prev free block in the "explicit list" of the heap
+ * by access the pred pointer
+ *
+ * @param[in] block A block in the heap
+ * @return The prev free block on the heap
+ * @pre The block is not the prologue
+ */
+static block_t *find_prev_free(block_t *block) {
+    dbg_requires(block != NULL);
+    return block->body.link_list.pred;
+}
+
+/**
  * @brief Finds the footer of the previous block on the heap.
  * @param[in] block A block in the heap
  * @return The location of the previous block's footer
@@ -413,6 +452,45 @@ static block_t *find_prev(block_t *block) {
     }
 
     return footer_to_header(footerp);
+}
+
+/**
+ * @brief Insert a free block into the free list using LIFO policy
+ * When the free_list_start is NULL, meaning this block is going to be the first free block
+ * when not NULL, the first free list block will has predcessor point to current block.
+ * @param[in] block A block being freed in the heap
+ * @post update the free list
+ */
+static void *insertFree(block_t *block) {
+    block->body.link_list.pred = NULL;
+    block->body.link_list.succ = free_list_start;
+    
+    if (free_list_start != NULL) {
+        free_list_start->body.link_list.pred = block;
+    }
+
+    free_list_start = block;
+}
+
+/**
+ * @brief the side effect of a block being allocated.
+ * remove block from the free list, Following LIFO policy.
+ *
+ * @param[in] block A block being allocated in the heap
+ */
+static void *removeFree(block_t *block) {
+    block_t *pred = block->body.link_list.pred;
+    block_t *succ = block->body.link_list.succ;
+
+    if (pred != NULL) {
+        pred->body.link_list.succ = succ;
+    } else {
+        free_list_start = succ;
+    }
+
+    if (succ != NULL) {
+        succ->body.link_list.pred = pred;
+    } 
 }
 
 /*
