@@ -644,12 +644,13 @@ static block_t *find_fit(size_t asize) {
 
     for (block = free_list_start; block != NULL;
          block = find_next_free(block)) {
-        //dbg_printf("Current block: %p, Succ: %p\n", (void*)block, (void*)block->body.link_list.succ);
+        // dbg_printf("Current block: %p, Succ: %p\n", (void*)block,
+        // (void*)block->body.link_list.succ);
         if (!(get_alloc(block)) && (asize <= get_size(block))) {
             return block;
         }
-    }  
-    return NULL; // no fit found  
+    }
+    return NULL; // no fit found
 }
 
 /**
@@ -672,7 +673,6 @@ static block_t *best_fit(size_t asize) {
 
     for (block = free_list_start; block != NULL;
          block = find_next_free(block)) {
-
         if (!(get_alloc(block)) && (asize <= get_size(block))) {
             if (diff == 0 || diff > get_size(block)) {
                 diff = get_size(block);
@@ -697,6 +697,8 @@ static block_t *best_fit(size_t asize) {
 bool mm_checkheap(int line) {
     block_t *block;
     word_t *prologue = (word_t *)heap_start - 1;
+    int free_count_heap = 0;
+    int free_count_list = 0;
     // check prologue
     if (*prologue != pack(0, true)) {
         dbg_printf("Error with prologue blocks.");
@@ -739,6 +741,11 @@ bool mm_checkheap(int line) {
                        line);
             return false;
         }
+
+        // get free blocks counts on heap
+        if (!get_alloc(block)) {
+            free_count_heap += 1;
+        }
     }
 
     // check epilogue
@@ -746,6 +753,40 @@ bool mm_checkheap(int line) {
         dbg_printf("Error with epilogue blocks.");
         return false;
     }
+
+    // check explicit free list
+    for (block = free_list_start; block != NULL;
+         block = find_next_free(block)) {
+        block_t *next_free = find_next_free(block);
+        block_t *prev_free = find_prev_free(block);
+
+        // if a's next point to b, b's prev should point to a
+        if (next_free != NULL && next_free->body.link_list.pred != block) {
+            dbg_printf("Next/previous pointers are not consistent at line %d\n",
+                       line);
+            return false;
+        }
+
+        if (prev_free != NULL && prev_free->body.link_list.succ != block) {
+            dbg_printf("Next/previous pointers are not consistent at line %d\n",
+                       line);
+            return false;
+        }
+        free_count_list += 1;
+
+        // check blocks lie within heap boundaries
+        if ((void *)block < mem_heap_lo() || (void *)block > mem_heap_hi()) {
+            dbg_printf("Block at %p is outside heap.\n", (void *)block);
+            return false;
+        }
+    }
+
+    if (free_count_heap != free_count_list) {
+        dbg_printf(
+            "Free block count on heap does not match with explicit free lists");
+        return false;
+    }
+
     return true;
 }
 
@@ -760,8 +801,8 @@ bool mm_checkheap(int line) {
 bool mm_init(void) {
     // Create the initial empty heap
     word_t *start = (word_t *)(mem_sbrk(2 * wsize));
-    
-    if (start == (void *)-1) {  
+
+    if (start == (void *)-1) {
         return false;
     }
     /*
@@ -799,7 +840,6 @@ void *malloc(size_t size) {
     size_t extendsize; // Amount to extend heap if no fit is found
     block_t *block;
     void *bp = NULL;
-
     // Initialize heap if it isn't initialized
     if (heap_start == NULL) {
         if (!(mm_init())) {
@@ -807,19 +847,15 @@ void *malloc(size_t size) {
             return NULL;
         }
     }
-
     // Ignore spurious request
     if (size == 0) {
         dbg_ensures(mm_checkheap(__LINE__));
         return bp;
     }
-
     // Adjust block size to include overhead and to meet alignment requirements
     asize = round_up(size + dsize, dsize);
-
     // Search the free list for a fit
-    block = find_fit(asize);
-
+    block = best_fit(asize);
     // If no fit is found, request more memory, and then and place the block
     if (block == NULL) {
         // Always request at least chunksize
@@ -830,22 +866,16 @@ void *malloc(size_t size) {
             return bp;
         }
     }
-
     // The block should be marked as free
     dbg_assert(!get_alloc(block));
-
     // Mark block as allocated
     size_t block_size = get_size(block);
     write_block(block, block_size, true);
-
     // Remove block from free list
     removeFree(block);
-
     // Try to split the block if too large
     split_block(block, asize);
-
     bp = header_to_payload(block);
-
     dbg_ensures(mm_checkheap(__LINE__));
     return bp;
 }
