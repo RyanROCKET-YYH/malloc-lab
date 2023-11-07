@@ -171,7 +171,7 @@ static block_t *heap_start = NULL;
 /** @brief Pointer to the first block in the free list */
 static block_t *free_list_start = NULL;
 
-static block_t *seglist[20];
+static block_t **seglist;
 
 /*
  *****************************************************************************
@@ -268,7 +268,7 @@ static int get_index(size_t size) {
         }
     }
     return (segindex_max - segindex_min);
-    //return 1;
+    // return 1;
 }
 
 /**
@@ -531,7 +531,8 @@ static void removeFree(block_t *block) {
     if (succ != NULL) {
         succ->body.link_list.pred = pred;
     }
-    printf("prev: %p, cur: %p, next: %p\n", (void *) pred, (void *) block, (void *) succ);
+    // printf("prev: %p, cur: %p, next: %p\n", (void *) pred, (void *) block,
+    // (void *) succ);
 }
 
 /*
@@ -571,7 +572,7 @@ static block_t *coalesce_block(block_t *block) {
         size += get_size(prev_block);
         block = prev_block;
         write_block(block, size, false);
-        
+
     } else if (!prev_alloc && !next_alloc) { /* Case 4 */
         size += get_size(prev_block) + get_size(next_block);
         block = prev_block;
@@ -672,16 +673,15 @@ static block_t *find_fit(size_t asize) {
         // dbg_printf("Current block: %p, Succ: %p\n", (void*)block,
         // (void*)block->body.link_list.succ);
         block = seglist[index];
-        int i = 0;
         while (block != NULL) {
-            //printf("%d, Blcok %p\n", i, (void *)block);
+            // printf("%d, Blcok %p\n", i, (void *)block);
             if (!(get_alloc(block)) && (asize <= get_size(block))) {
                 return block;
             }
-            //printf("%   d, Blcok %p\n", i, (void *)block->body.link_list.succ);
-            
+            // printf("%   d, Blcok %p\n", i, (void
+            // *)block->body.link_list.succ);
+
             block = block->body.link_list.succ;
-            i++;
         }
     }
     return NULL; // no fit found
@@ -788,30 +788,53 @@ bool mm_checkheap(int line) {
         return false;
     }
 
-    // check explicit free list
-    for (block = free_list_start; block != NULL;
-         block = find_next_free(block)) {
-        block_t *next_free = find_next_free(block);
-        block_t *prev_free = find_prev_free(block);
+    for (int i = 0; i < segclass; i++) {
+        block_t *current_block = seglist[i];
 
-        // if a's next point to b, b's prev should point to a
-        if (next_free != NULL && next_free->body.link_list.pred != block) {
-            dbg_printf("Next/previous pointers are not consistent at line %d\n",
-                       line);
-            return false;
-        }
+        while (current_block != NULL) {
+            // check all free lists are inside heap boundaries
+            if ((void *)current_block < mem_heap_lo() ||
+                (void *)current_block > mem_heap_hi()) {
+                dbg_printf("Block at %p is outside heap boundaries\n",
+                           (void *)current_block);
+                return false;
+            }
+            // check all blocks in free list are free
+            if (get_alloc(current_block)) {
+                dbg_printf("Allocated block in the free list\n");
+                return false;
+            }
+            // check all blocks fall within bucket size range
+            // size_t size = get_size(current_block);
+            // int index = get_index(size);
+            // if (index != i) {
+            //     dbg_printf("Block at %p not within bucket size range\n",
+            //                (void *)current_block);
+            //     return false;
+            // }
 
-        if (prev_free != NULL && prev_free->body.link_list.succ != block) {
-            dbg_printf("Next/previous pointers are not consistent at line %d\n",
-                       line);
-            return false;
-        }
-        free_count_list += 1;
+            // check consistency
+            block_t *next_free = current_block->body.link_list.succ;
+            block_t *prev_free = current_block->body.link_list.pred;
+            // if a's next point to b, b's prev should point to a
+            if (next_free != NULL &&
+                next_free->body.link_list.pred != current_block) {
+                dbg_printf(
+                    "Next/previous pointers are not consistent at line %d\n",
+                    line);
+                return false;
+            }
 
-        // check blocks lie within heap boundaries
-        if ((void *)block < mem_heap_lo() || (void *)block > mem_heap_hi()) {
-            dbg_printf("Block at %p is outside heap.\n", (void *)block);
-            return false;
+            if (prev_free != NULL &&
+                prev_free->body.link_list.succ != current_block) {
+                dbg_printf(
+                    "Next/previous pointers are not consistent at line %d\n",
+                    line);
+                return false;
+            }
+            free_count_list += 1;
+
+            current_block = current_block->body.link_list.succ;
         }
     }
 
@@ -848,7 +871,7 @@ bool mm_init(void) {
      * of the heap. Prologue correspond to footer and epilogue correspond to
      * header are preventing them from coalescing operation.
      */
-
+    seglist = (block_t **)(start);
     for (int i = 0; i < segclass; i++) {
         seglist[i] = NULL;
     }
@@ -864,7 +887,7 @@ bool mm_init(void) {
     }
 
     // free_list_start = NULL;
-    //insertFree(initial_block);
+    // insertFree(initial_block);
     return true;
 }
 
@@ -933,23 +956,17 @@ void *malloc(size_t size) {
  */
 void free(void *bp) {
     dbg_requires(mm_checkheap(__LINE__));
-
     if (bp == NULL) {
         return;
     }
-
     block_t *block = payload_to_header(bp);
     size_t size = get_size(block);
-
     // The block should be marked as allocated
     dbg_assert(get_alloc(block));
-
     // Mark the block as free
     write_block(block, size, false);
-
     // Try to coalesce the block with its neighbors
     coalesce_block(block);
-
     dbg_ensures(mm_checkheap(__LINE__));
 }
 
@@ -965,36 +982,29 @@ void *realloc(void *ptr, size_t size) {
     block_t *block = payload_to_header(ptr);
     size_t copysize;
     void *newptr;
-
     // If size == 0, then free block and return NULL
     if (size == 0) {
         free(ptr);
         return NULL;
     }
-
     // If ptr is NULL, then equivalent to malloc
     if (ptr == NULL) {
         return malloc(size);
     }
-
     // Otherwise, proceed with reallocation
     newptr = malloc(size);
-
     // If malloc fails, the original block is left untouched
     if (newptr == NULL) {
         return NULL;
     }
-
     // Copy the old data
     copysize = get_payload_size(block); // gets size of old payload
     if (size < copysize) {
         copysize = size;
     }
     memcpy(newptr, ptr, copysize);
-
     // Free the old block
     free(ptr);
-
     return newptr;
 }
 
@@ -1009,7 +1019,6 @@ void *realloc(void *ptr, size_t size) {
 void *calloc(size_t elements, size_t size) {
     void *bp;
     size_t asize = elements * size;
-
     if (elements == 0) {
         return NULL;
     }
@@ -1017,16 +1026,37 @@ void *calloc(size_t elements, size_t size) {
         // Multiplication overflowed
         return NULL;
     }
-
     bp = malloc(asize);
     if (bp == NULL) {
         return NULL;
     }
-
     // Initialize all bits to 0
     memset(bp, 0, asize);
-
     return bp;
+}
+
+static void print_heap(void) {
+    block_t *block = heap_start;
+    printf("--------------------------\n");
+    printf("Heap START\n");
+    while (get_size(block) != 0) {
+        size_t size = get_size(block);
+        bool allocated = get_alloc(block);
+        block_t *pred = block->body.link_list.pred;
+        block_t *succ = block->body.link_list.succ;
+        printf("Block %p, size %lu, allocated %d\n", (void *)block, size,
+               allocated);
+
+        if (!allocated) {
+            int index = get_index(size);
+            printf("Free block in seglist[%d]\n", index);
+            printf("prev free block %p, next free block %p", (void *)pred,
+                   (void *)succ);
+        }
+        block = find_next(block);
+    }
+    printf("Heap END\n");
+    printf("--------------------------\n");
 }
 
 /*
