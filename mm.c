@@ -89,8 +89,8 @@ typedef uint64_t word_t;
 const int segclass = 20;
 
 /** @brief define the size of seglist min and max*/
-const int segindex_min = 4;
-const int segindex_max = 24;
+const int segindex_min = 5;
+const int segindex_max = 25;
 
 /** @brief Word and header size (bytes) */
 static const size_t wsize = sizeof(word_t);
@@ -106,7 +106,7 @@ static const size_t min_block_size = 2 * dsize;
  * the heap. (1 << 12) = 2^12 = 4096 bytes (Must be divisible by dsize) because
  * of alighment
  */
-static const size_t chunksize = (1 << 8);
+static const size_t chunksize = (1 << 11);
 
 /**
  * @brief Alloc mask is the bit mask tells if the block is being allocated
@@ -261,15 +261,15 @@ static size_t get_size(block_t *block) {
  * @return The index of seg list
  */
 static int get_index(size_t size) {
-    // int index;
-    
-    // for (index = segindex_min; index < segindex_max -1; index++) {
-    //     if (size <= (1 << index)) {
-    //         return (index - segindex_min);
-    //     }
-    // }
-    // return (segindex_max - segindex_min -1);
-    return 1;
+    int index;
+
+    for (index = segindex_min; index < segindex_max - 1; index++) {
+        if (size <= (1 << index)) {
+            return (index - segindex_min);
+        }
+    }
+    return (segindex_max - segindex_min - 1);
+    // return 1;
 }
 
 /**
@@ -520,15 +520,33 @@ static void removeFree(block_t *block) {
     block_t *pred = block->body.link_list.pred;
     block_t *succ = block->body.link_list.succ;
 
-    if (pred != NULL) {
-        pred->body.link_list.succ = succ;
-    } else if (pred == NULL) {
-        seglist[index] = succ;
+    // only free block
+    if (pred == NULL && succ == NULL) {
+        seglist[index] = NULL;
     }
-
-    if (succ != NULL) {
+    // first free block
+    else if (pred == NULL && succ != NULL) {
+        seglist[index] = succ;
+        succ->body.link_list.pred = NULL;
+    }
+    // middle free block
+    else if (pred != NULL && succ != NULL) {
+        pred->body.link_list.succ = succ;
         succ->body.link_list.pred = pred;
     }
+    // last free block
+    else if (pred != NULL && succ == NULL) {
+        pred->body.link_list.succ = NULL;
+    }
+    // if (pred != NULL) {
+    //     pred->body.link_list.succ = succ;
+    // } else if (pred == NULL) {
+    //     seglist[index] = succ;
+    // }
+
+    // if (succ != NULL) {
+    //     succ->body.link_list.pred = pred;
+    // }
     // printf("prev: %p, cur: %p, next: %p\n", (void *) pred, (void *) block,
     // (void *) succ);
 }
@@ -548,7 +566,8 @@ static void print_heap(void) {
         if (!allocated) {
             int index = get_index(size);
             block_t *free_block = seglist[index];
-            printf("Free block in seglist[%d], block %p\n", index, (void *) free_block);
+            printf("Free block in seglist[%d], block %p\n", index,
+                   (void *)free_block);
             printf("prev free block %p, next free block %p\n", (void *)pred,
                    (void *)succ);
         }
@@ -584,26 +603,27 @@ static block_t *coalesce_block(block_t *block) {
     bool next_alloc = (next_block == NULL) ? true : get_alloc(next_block);
     size_t size = get_size(block);
 
-    if (prev_alloc && next_alloc) { /* Case 1 */
-        // write_block(block, size, false);
-    } else if (prev_alloc && !next_alloc) { /* Case 2 */
-        size += get_size(next_block);
-        write_block(block, size, false);
-        removeFree(next_block);
-    } else if (!prev_alloc && next_alloc) { /* Case 3 */
-        removeFree(prev_block);
-        size += get_size(prev_block);
-        block = prev_block;
-        write_block(block, size, false);
-
-    } else if (!prev_alloc && !next_alloc) { /* Case 4 */
-        size += get_size(prev_block) + get_size(next_block);
-        block = prev_block;
-        write_block(block, size, false);
-        removeFree(prev_block);
-        removeFree(next_block);
+    if (!get_alloc(block)) {
+        if (prev_alloc && next_alloc) { /* Case 1 */
+            // write_block(block, size, false);
+        } else if (prev_alloc && !next_alloc) { /* Case 2 */
+            size += get_size(next_block);
+            write_block(block, size, false);
+            removeFree(next_block);
+        } else if (!prev_alloc && next_alloc) { /* Case 3 */
+            removeFree(prev_block);
+            size += get_size(prev_block);
+            block = prev_block;
+            write_block(block, size, false);
+        } else if (!prev_alloc && !next_alloc) { /* Case 4 */
+            removeFree(prev_block);
+            removeFree(next_block);
+            size += get_size(prev_block) + get_size(next_block);
+            block = prev_block;
+            write_block(block, size, false);
+        }
+        insertFree(block);
     }
-    insertFree(block);
     return block;
 }
 
@@ -672,17 +692,13 @@ static void split_block(block_t *block, size_t asize) {
         write_block(block_next, block_size - asize, false);
         // insert the new free block into the list
         insertFree(block_next);
+        // coalesce_block(block_next);
     }
     dbg_ensures(get_alloc(block));
 }
 
 /**
  * @brief Search for the availbe block on heap using first fit.
- *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
  *
  * @param[in] asize The size of the block need to be allocated.
  * @return The pointer to the first fitted block. If no fit return NULL.
@@ -692,11 +708,11 @@ static void split_block(block_t *block, size_t asize) {
 static block_t *find_fit(size_t asize) {
     block_t *block;
     int index;
-    //printf("Called get_index with size: %lu\n", asize);
+    // printf("Called get_index with size: %lu\n", asize);
     for (index = get_index(asize); index < segclass; index++) {
-        // printf("Called get_index with size: %lu, size threshold: %lu\n", asize, (size_t)(1 << (index+4)));
-        // dbg_printf("Current block: %p, Succ: %p\n", (void*)block,
-        // (void*)block->body.link_list.succ);
+        // printf("Called get_index with size: %lu, size threshold: %lu\n",
+        // asize, (size_t)(1 << (index+4))); dbg_printf("Current block: %p,
+        // Succ: %p\n", (void*)block, (void*)block->body.link_list.succ);
         block = seglist[index];
         int i = 0;
         // printf("Returning index %d, block %p\n", index, (void *) block);
@@ -705,7 +721,7 @@ static block_t *find_fit(size_t asize) {
             if (!(get_alloc(block)) && (asize <= get_size(block))) {
                 return block;
             }
-            // printf("%   d, Blcok %p\n", i, (void
+            // printf("%d, Blcok %p\n", i, (void
             // *)block->body.link_list.succ);
 
             block = block->body.link_list.succ;
@@ -717,11 +733,6 @@ static block_t *find_fit(size_t asize) {
 
 /**
  * @brief Search for the availbe block on heap using best fit.
- *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
  *
  * @param[in] asize The size of the block need to be allocated.
  * @return The pointer to the first fitted block. If no fit return NULL.
@@ -869,7 +880,8 @@ bool mm_checkheap(int line) {
     if (free_count_heap != free_count_list) {
         dbg_printf(
             "Free block count on heap does not match with explicit free lists");
-        dbg_printf("free_count_heap %d, free_count_list %d\n",free_count_heap,free_count_list);
+        // printf("free_count_heap %d, free_count_list
+        // %d\n",free_count_heap,free_count_list);
         return false;
     }
 
@@ -916,7 +928,6 @@ bool mm_init(void) {
     }
 
     // free_list_start = NULL;
-    // insertFree(initial_block);
     return true;
 }
 
@@ -1071,7 +1082,6 @@ void *calloc(size_t elements, size_t size) {
     memset(bp, 0, asize);
     return bp;
 }
-
 
 /*
  *****************************************************************************
