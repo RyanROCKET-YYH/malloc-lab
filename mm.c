@@ -106,7 +106,7 @@ static const size_t min_block_size = 2 * dsize;
  * the heap. (1 << 12) = 2^12 = 4096 bytes (Must be divisible by dsize) because
  * of alighment
  */
-static const size_t chunksize = (1 << 12);
+static const size_t chunksize = (1 << 8);
 
 /**
  * @brief Alloc mask is the bit mask tells if the block is being allocated
@@ -256,19 +256,20 @@ static size_t get_size(block_t *block) {
 }
 
 /**
- * @brief Extracts the seg list index according to the size
+ * @brief Extracts the seg list index according to the size (0-20)
  * @param[in] size the size of block
  * @return The index of seg list
  */
 static int get_index(size_t size) {
-    int index;
-    for (index = segindex_min; index < segindex_max; index++) {
-        if (size <= (1 << index)) {
-            return (index - segindex_min);
-        }
-    }
-    return (segindex_max - segindex_min);
-    // return 1;
+    // int index;
+    
+    // for (index = segindex_min; index < segindex_max -1; index++) {
+    //     if (size <= (1 << index)) {
+    //         return (index - segindex_min);
+    //     }
+    // }
+    // return (segindex_max - segindex_min -1);
+    return 1;
 }
 
 /**
@@ -512,9 +513,6 @@ static void insertFree(block_t *block) {
  * @param[in] block A block being allocated in the heap
  */
 static void removeFree(block_t *block) {
-    // if (get_alloc(block) != 0) {
-    //     printf("Remove: Hmmmm... %p\n", (void *) block);
-    // }
     size_t size = get_size(block);
     int index = get_index(size);
 
@@ -533,6 +531,31 @@ static void removeFree(block_t *block) {
     }
     // printf("prev: %p, cur: %p, next: %p\n", (void *) pred, (void *) block,
     // (void *) succ);
+}
+
+static void print_heap(void) {
+    block_t *block = heap_start;
+    printf("--------------------------\n");
+    printf("Heap START\n");
+    while (get_size(block) != 0) {
+        size_t size = get_size(block);
+        bool allocated = get_alloc(block);
+        block_t *pred = block->body.link_list.pred;
+        block_t *succ = block->body.link_list.succ;
+        printf("Block %p, size %lu, allocated %d\n", (void *)block, size,
+               allocated);
+
+        if (!allocated) {
+            int index = get_index(size);
+            block_t *free_block = seglist[index];
+            printf("Free block in seglist[%d], block %p\n", index, (void *) free_block);
+            printf("prev free block %p, next free block %p\n", (void *)pred,
+                   (void *)succ);
+        }
+        block = find_next(block);
+    }
+    printf("Heap END\n");
+    printf("--------------------------\n");
 }
 
 /*
@@ -668,11 +691,15 @@ static void split_block(block_t *block, size_t asize) {
  */
 static block_t *find_fit(size_t asize) {
     block_t *block;
-
-    for (int index = get_index(asize); index < segclass; index++) {
+    int index;
+    //printf("Called get_index with size: %lu\n", asize);
+    for (index = get_index(asize); index < segclass; index++) {
+        // printf("Called get_index with size: %lu, size threshold: %lu\n", asize, (size_t)(1 << (index+4)));
         // dbg_printf("Current block: %p, Succ: %p\n", (void*)block,
         // (void*)block->body.link_list.succ);
         block = seglist[index];
+        int i = 0;
+        // printf("Returning index %d, block %p\n", index, (void *) block);
         while (block != NULL) {
             // printf("%d, Blcok %p\n", i, (void *)block);
             if (!(get_alloc(block)) && (asize <= get_size(block))) {
@@ -682,6 +709,7 @@ static block_t *find_fit(size_t asize) {
             // *)block->body.link_list.succ);
 
             block = block->body.link_list.succ;
+            i++;
         }
     }
     return NULL; // no fit found
@@ -841,6 +869,7 @@ bool mm_checkheap(int line) {
     if (free_count_heap != free_count_list) {
         dbg_printf(
             "Free block count on heap does not match with explicit free lists");
+        dbg_printf("free_count_heap %d, free_count_list %d\n",free_count_heap,free_count_list);
         return false;
     }
 
@@ -920,6 +949,7 @@ void *malloc(size_t size) {
     }
     // Adjust block size to include overhead and to meet alignment requirements
     asize = round_up(size + dsize, dsize);
+    // printf("current allocation size %lu, round-up size %lu\n", size, asize);
     // Search the free list for a fit
     block = find_fit(asize);
     // If no fit is found, request more memory, and then and place the block
@@ -943,6 +973,7 @@ void *malloc(size_t size) {
     split_block(block, asize);
     bp = header_to_payload(block);
     dbg_ensures(mm_checkheap(__LINE__));
+    // print_heap();
     return bp;
 }
 
@@ -965,9 +996,15 @@ void free(void *bp) {
     dbg_assert(get_alloc(block));
     // Mark the block as free
     write_block(block, size, false);
+    // printf("block address after being freed %p\n", (void *)block);
     // Try to coalesce the block with its neighbors
     coalesce_block(block);
-    dbg_ensures(mm_checkheap(__LINE__));
+    // print_heap();
+    // dbg_ensures(mm_checkheap(__LINE__));
+    if (!mm_checkheap(__LINE__)) {
+        dbg_printf("Assertion\n");
+        assert(0);
+    }
 }
 
 /**
@@ -1035,29 +1072,6 @@ void *calloc(size_t elements, size_t size) {
     return bp;
 }
 
-static void print_heap(void) {
-    block_t *block = heap_start;
-    printf("--------------------------\n");
-    printf("Heap START\n");
-    while (get_size(block) != 0) {
-        size_t size = get_size(block);
-        bool allocated = get_alloc(block);
-        block_t *pred = block->body.link_list.pred;
-        block_t *succ = block->body.link_list.succ;
-        printf("Block %p, size %lu, allocated %d\n", (void *)block, size,
-               allocated);
-
-        if (!allocated) {
-            int index = get_index(size);
-            printf("Free block in seglist[%d]\n", index);
-            printf("prev free block %p, next free block %p", (void *)pred,
-                   (void *)succ);
-        }
-        block = find_next(block);
-    }
-    printf("Heap END\n");
-    printf("--------------------------\n");
-}
 
 /*
  *****************************************************************************
