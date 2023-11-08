@@ -538,17 +538,6 @@ static void removeFree(block_t *block) {
     else if (pred != NULL && succ == NULL) {
         pred->body.link_list.succ = NULL;
     }
-    // if (pred != NULL) {
-    //     pred->body.link_list.succ = succ;
-    // } else if (pred == NULL) {
-    //     seglist[index] = succ;
-    // }
-
-    // if (succ != NULL) {
-    //     succ->body.link_list.pred = pred;
-    // }
-    // printf("prev: %p, cur: %p, next: %p\n", (void *) pred, (void *) block,
-    // (void *) succ);
 }
 
 static void print_heap(void) {
@@ -714,7 +703,6 @@ static block_t *find_fit(size_t asize) {
         // asize, (size_t)(1 << (index+4))); dbg_printf("Current block: %p,
         // Succ: %p\n", (void*)block, (void*)block->body.link_list.succ);
         block = seglist[index];
-        int i = 0;
         // printf("Returning index %d, block %p\n", index, (void *) block);
         while (block != NULL) {
             // printf("%d, Blcok %p\n", i, (void *)block);
@@ -725,7 +713,7 @@ static block_t *find_fit(size_t asize) {
             // *)block->body.link_list.succ);
 
             block = block->body.link_list.succ;
-            i++;
+            // i++;
         }
     }
     return NULL; // no fit found
@@ -757,15 +745,13 @@ static block_t *best_fit(size_t asize) {
 }
 
 /**
- * @brief
+ * @brief Heap checker
+ * Able to check the prologue and epilogue,check block lies within heap boundary
+ * address alignment, header and footer match each other, coalescing, next and previous pointers 
+ * are consistent, all seg free blocks falls within size range of bucket lists, free blocks match each other in heap and free list
  *
- * <What does this function do?>
- * <What are the function's arguments?>
- * <What is the function's return value?>
- * <Are there any preconditions or postconditions?>
- *
- * @param[in] line
- * @return
+ * @param[in] line line number causing the fault
+ * @return true or false based on heap condition
  */
 bool mm_checkheap(int line) {
     block_t *block;
@@ -844,13 +830,13 @@ bool mm_checkheap(int line) {
                 return false;
             }
             // check all blocks fall within bucket size range
-            // size_t size = get_size(current_block);
-            // int index = get_index(size);
-            // if (index != i) {
-            //     dbg_printf("Block at %p not within bucket size range\n",
-            //                (void *)current_block);
-            //     return false;
-            // }
+            size_t size = get_size(current_block);
+            int index = get_index(size);
+            if (index != i) {
+                dbg_printf("Block at %p not within bucket size range\n",
+                           (void *)current_block);
+                return false;
+            }
 
             // check consistency
             block_t *next_free = current_block->body.link_list.succ;
@@ -903,7 +889,6 @@ bool mm_init(void) {
     // Create the initial empty heap with seglist pointers, prologue and
     // epilogue
     word_t *start = (word_t *)(mem_sbrk((intptr_t)initial_space));
-
     if (start == (void *)-1) {
         return false;
     }
@@ -926,7 +911,6 @@ bool mm_init(void) {
     if (initial_block == NULL) {
         return false;
     }
-
     // free_list_start = NULL;
     return true;
 }
@@ -1011,11 +995,11 @@ void free(void *bp) {
     // Try to coalesce the block with its neighbors
     coalesce_block(block);
     // print_heap();
-    // dbg_ensures(mm_checkheap(__LINE__));
-    if (!mm_checkheap(__LINE__)) {
-        dbg_printf("Assertion\n");
-        assert(0);
-    }
+    dbg_ensures(mm_checkheap(__LINE__));
+    // if (!mm_checkheap(__LINE__)) {
+    //     dbg_printf("Assertion\n");
+    //     assert(0);
+    // }
 }
 
 /**
