@@ -4,17 +4,38 @@
  *
  * 15-213: Introduction to Computer Systems
  *
- * TODO: insert your documentation here. :)
+ * Documentation:
+ * This is the documention about the implementation details of this dynamic
+ * memory allocation and deallocation. The system utilizes a segregated free
+ * list to manage different block sizes (power of 2) and also implementing
+ * the mini blocks.
  *
- *************************************************************************
+ * Block Structure:
+ * 1. Regular Blocks: Regular memory blocks consist of a header, payload when
+ * allocated. When the block is free, it will consists of header and pred, succ
+ * pointer and footer.
+ * The header and footer store metadata about the block, including its size and
+ * current and previous block allocation status as well as if previous block is
+ * a mini block.
+ * 2. Mini Blocks: Mini blocks are a special type of block designed for small
+ * allocations. They consist of only a header and payload.
+ * The header has the same information as regular blocks.
  *
- * ADVICE FOR STUDENTS.
- * - Step 0: Please read the writeup!
- * - Step 1: Write your heap checker.
- * - Step 2: Write contracts / debugging assert statements.
- * - Good luck, and have fun!
+ * Segregated Free list:
+ * The purpose is to categorizing free blocks into different size class.
+ * In my implementation, there are 20 segregated free lists starting from {16},
+ * {17-32}, {33-64}, ..., {2^21+1-2^22}, {2^22+1-inf}
  *
- *************************************************************************
+ * Footless in allocated blocks:
+ * In naive implemetation, there will always be 8 bytes footer and 8 bytes
+ * header, so we get rid of footer and save some more space for the allocated
+ * blocks.
+ *
+ * Mini Block management:
+ * Use an extra bit to tell if the previous block is mini block so that we can
+ * find the previous block by its size even if there is no footer
+ * While regular free blocks are double linked list, mini blocks are singly
+ * linked list
  *
  * @author Yuhong Yao <yuhongy@andrew.cmu.edu>
  */
@@ -106,7 +127,7 @@ static const size_t min_block_size = dsize;
  * the heap. (1 << 12) = 2^12 = 4096 bytes (Must be divisible by dsize) because
  * of alighment
  */
-static const size_t chunksize = (1 << 10);
+static const size_t chunksize = (1 << 8);
 
 /**
  * @brief Alloc mask is the bit mask tells if the block is being allocated
@@ -574,7 +595,8 @@ static void insertFree(block_t *block) {
     // printf("496, size: %lu, %d\n", size, index);
     if (size == dsize) { // manage mini_block free list
         block->body.mini_block.next = seglist[0];
-        // printf("577 next free in mini_block %p\n", (void *) block->body.mini_block.next);
+        // printf("577 next free in mini_block %p\n", (void *)
+        // block->body.mini_block.next);
     } else {
         block->body.link_list.pred = NULL;
         // printf("%p, %p\n", (void *) block, (void *) seglist[index]);
@@ -819,16 +841,6 @@ static block_t *find_fit(size_t asize) {
     block_t *block;
     int start_index = (asize <= dsize) ? 0 : get_index(asize);
 
-    // if (asize == dsize) {
-    //     block = seglist[0];
-    //     while (block != NULL) {
-    //         if (!(get_alloc(block)) && (asize <= get_size(block))) {
-    //             return block;
-    //         }
-    //         block = block->body.mini_block.next;
-    //     }
-    // }
-
     // printf("Called get_index with size: %lu\n", asize);
     for (int index = start_index; index < segclass; index++) {
         // printf("Called get_index with size: %lu, size threshold: %lu\n",
@@ -840,7 +852,7 @@ static block_t *find_fit(size_t asize) {
             if (!(get_alloc(block)) && (asize <= get_size(block))) {
                 return block;
             }
-            
+
             if (index == 0) {
                 block = block->body.mini_block.next;
             } else {
@@ -974,8 +986,9 @@ bool mm_checkheap(int line) {
             // check all free lists are inside heap boundaries
             if ((void *)current_block < mem_heap_lo() ||
                 (void *)current_block > mem_heap_hi()) {
-                dbg_printf("Block at %p is outside heap boundaries at line %d\n",
-                           (void *)current_block, line);
+                dbg_printf(
+                    "Block at %p is outside heap boundaries at line %d\n",
+                    (void *)current_block, line);
                 return false;
             }
             // check all blocks in free list are free
