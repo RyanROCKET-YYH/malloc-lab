@@ -283,7 +283,7 @@ static size_t get_size(block_t *block) {
  * @return The index of seg list
  */
 static int get_index(size_t size) {
-    int index;
+    int index = segindex_min;
 
     for (index = segindex_min; index < segindex_max - 1; index++) {
         if (size <= (1 << index)) {
@@ -471,17 +471,16 @@ static void write_block(block_t *block, size_t size, bool alloc,
     dbg_requires(block != NULL);
     dbg_requires(size > 0);
     block->header = pack(size, alloc, prev_alloc, prev_mini);
-    if (!alloc) {
+    bool curr_mini = (size == dsize);
+
+    if (!alloc && !curr_mini) {
         word_t *footerp = header_to_footer(block);
         *footerp = pack(size, false, prev_alloc, prev_mini);
     }
+
     block_t *next_block = find_next(block);
     size_t next_size = get_size(next_block);
     bool next_alloc = get_alloc(next_block);
-    bool curr_mini = false;
-    if (size == dsize) {
-        curr_mini = true;
-    }
     next_block->header = pack(next_size, next_alloc, alloc, curr_mini);
 }
 
@@ -553,6 +552,7 @@ static block_t *find_prev(block_t *block) {
 
         return footer_to_header(footerp);
     } else {
+        // if prev block is a mini block, just minus the size of mini block
         return (block_t *)((char *)block - dsize);
     }
 }
@@ -574,6 +574,7 @@ static void insertFree(block_t *block) {
     // printf("496, size: %lu, %d\n", size, index);
     if (size == dsize) { // manage mini_block free list
         block->body.mini_block.next = seglist[0];
+        // printf("577 next free in mini_block %p\n", (void *) block->body.mini_block.next);
     } else {
         block->body.link_list.pred = NULL;
         // printf("%p, %p\n", (void *) block, (void *) seglist[index]);
@@ -600,7 +601,7 @@ static void removeFree(block_t *block) {
         block_t *prev = NULL; // set a prev pointer as a local
 
         while (curr != NULL) { // traverse through mini_block free list because
-                               // there is no pred
+                               // there is no prev
             if (curr == block) {
                 if (prev == NULL) { // first in the free block
                     seglist[0] = curr->body.mini_block.next;
@@ -646,21 +647,30 @@ static void print_heap(void) {
         size_t size = get_size(block);
         bool allocated = get_alloc(block);
         bool prev_alloc = get_prev_alloc(block);
-        block_t *pred = block->body.link_list.pred;
-        block_t *succ = block->body.link_list.succ;
-        printf(
-            "Block %p, size %lu, allocated %d, prev_allocated %d, header %lx\n",
-            (void *)block, size, allocated, prev_alloc, block->header);
+        bool prev_mini = get_prev_mini(block);
+        bool curr_mini = (size == dsize) ? true : false;
+
+        printf("Block %p, size %lu, allocated %d, prev_allocated %d, prev_mini "
+               "%d, header %lx\n",
+               (void *)block, size, allocated, prev_alloc, prev_mini,
+               block->header);
 
         if (!allocated) {
-            word_t *footerp = header_to_footer(block);
-            printf("Footer: %lx\n", *footerp);
             int index = get_index(size);
             block_t *free_block = seglist[index];
             printf("Free block in seglist[%d], block %p\n", index,
                    (void *)free_block);
-            printf("prev free block %p, next free block %p\n", (void *)pred,
-                   (void *)succ);
+            if (!curr_mini) {
+                word_t *footerp = header_to_footer(block);
+                block_t *pred = block->body.link_list.pred;
+                block_t *succ = block->body.link_list.succ;
+                printf("Footer: %lx\n", *footerp);
+                printf("prev free block %p, next free block %p\n", (void *)pred,
+                       (void *)succ);
+            } else {
+                block_t *next = block->body.mini_block.next;
+                printf("next free block %p\n", (void *)next);
+            }
         }
         block = find_next(block);
     }
@@ -699,8 +709,8 @@ static block_t *coalesce_block(block_t *block) {
             // write_block(block, size, false);
         } else if (prev_alloc && !next_alloc) { /* Case 2 */
             size += get_size(next_block);
-            write_block(block, size, false, prev_alloc, prev_mini);
             removeFree(next_block);
+            write_block(block, size, false, prev_alloc, prev_mini);
         } else if (!prev_alloc && next_alloc) { /* Case 3 */
             block_t *prev_block = find_prev(block);
             prev_mini = get_prev_mini(prev_block);
@@ -807,24 +817,35 @@ static void split_block(block_t *block, size_t asize, size_t block_size) {
  */
 static block_t *find_fit(size_t asize) {
     block_t *block;
-    int index;
+    int start_index = (asize <= dsize) ? 0 : get_index(asize);
+
+    // if (asize == dsize) {
+    //     block = seglist[0];
+    //     while (block != NULL) {
+    //         if (!(get_alloc(block)) && (asize <= get_size(block))) {
+    //             return block;
+    //         }
+    //         block = block->body.mini_block.next;
+    //     }
+    // }
+
     // printf("Called get_index with size: %lu\n", asize);
-    for (index = get_index(asize); index < segclass; index++) {
+    for (int index = start_index; index < segclass; index++) {
         // printf("Called get_index with size: %lu, size threshold: %lu\n",
         // asize, (size_t)(1 << (index+4))); dbg_printf("Current block: %p,
         // Succ: %p\n", (void*)block, (void*)block->body.link_list.succ);
         block = seglist[index];
         // printf("Returning index %d, block %p\n", index, (void *) block);
         while (block != NULL) {
-            // printf("%d, Blcok %p\n", i, (void *)block);
             if (!(get_alloc(block)) && (asize <= get_size(block))) {
                 return block;
             }
-            // printf("%d, Blcok %p\n", i, (void
-            // *)block->body.link_list.succ);
-
-            block = block->body.link_list.succ;
-            // i++;
+            
+            if (index == 0) {
+                block = block->body.mini_block.next;
+            } else {
+                block = block->body.link_list.succ;
+            }
         }
     }
     return NULL; // no fit found
@@ -891,7 +912,7 @@ bool mm_checkheap(int line) {
             return false;
         }
 
-        if (!get_alloc(block)) {
+        if (!get_alloc(block) && !(get_size(block) == dsize)) {
             // check each block's header and footer
             if (get_alloc(block) != extract_alloc(*header_to_footer(block)) ||
                 get_size(block) != extract_size(*header_to_footer(block)) ||
@@ -910,6 +931,15 @@ bool mm_checkheap(int line) {
             dbg_printf("Previous allocation bit does not match at line %d\n",
                        line);
             return false;
+        }
+
+        if (get_alloc(block)) {
+            // check prev_mini_bit matches
+            if ((get_size(block) == dsize) != get_prev_mini(find_next(block))) {
+                dbg_printf("Previous mini bit does not match at line %d\n",
+                           line);
+                return false;
+            }
         }
 
         // check blocks lie within heap boundaries
@@ -944,8 +974,8 @@ bool mm_checkheap(int line) {
             // check all free lists are inside heap boundaries
             if ((void *)current_block < mem_heap_lo() ||
                 (void *)current_block > mem_heap_hi()) {
-                dbg_printf("Block at %p is outside heap boundaries\n",
-                           (void *)current_block);
+                dbg_printf("Block at %p is outside heap boundaries at line %d\n",
+                           (void *)current_block, line);
                 return false;
             }
             // check all blocks in free list are free
@@ -962,28 +992,40 @@ bool mm_checkheap(int line) {
                 return false;
             }
 
-            // check consistency
-            block_t *next_free = current_block->body.link_list.succ;
-            block_t *prev_free = current_block->body.link_list.pred;
-            // if a's next point to b, b's prev should point to a
-            if (next_free != NULL &&
-                next_free->body.link_list.pred != current_block) {
-                dbg_printf(
-                    "Next/previous pointers are not consistent at line %d\n",
-                    line);
-                return false;
-            }
+            if (i == 0) {
+                block_t *next_free_mini = current_block->body.mini_block.next;
+                if (next_free_mini != NULL &&
+                    ((void *)next_free_mini < mem_heap_lo() ||
+                     (void *)next_free_mini > mem_heap_hi())) {
+                    dbg_printf(
+                        "Next mini block at %p is outside heap boundaries\n",
+                        (void *)next_free_mini);
+                    return false;
+                }
+                current_block = next_free_mini;
+            } else {
+                // check consistency
+                block_t *next_free = current_block->body.link_list.succ;
+                block_t *prev_free = current_block->body.link_list.pred;
+                // if a's next point to b, b's prev should point to a
+                if (next_free != NULL &&
+                    next_free->body.link_list.pred != current_block) {
+                    dbg_printf("Next/previous pointers are not consistent at "
+                               "line %d\n",
+                               line);
+                    return false;
+                }
 
-            if (prev_free != NULL &&
-                prev_free->body.link_list.succ != current_block) {
-                dbg_printf(
-                    "Next/previous pointers are not consistent at line %d\n",
-                    line);
-                return false;
+                if (prev_free != NULL &&
+                    prev_free->body.link_list.succ != current_block) {
+                    dbg_printf("Next/previous pointers are not consistent at "
+                               "line %d\n",
+                               line);
+                    return false;
+                }
+                current_block = next_free;
             }
             free_count_list += 1;
-
-            current_block = current_block->body.link_list.succ;
         }
     }
 
@@ -1037,7 +1079,6 @@ bool mm_init(void) {
     if (initial_block == NULL) {
         return false;
     }
-    mini_block_root = NULL;
     // free_list_start = NULL;
     return true;
 }
@@ -1101,7 +1142,7 @@ void *malloc(size_t size) {
     split_block(block, asize, block_size);
     bp = header_to_payload(block);
     dbg_ensures(mm_checkheap(__LINE__));
-    // print_heap(ß);
+    // print_heap();
     return bp;
 }
 
